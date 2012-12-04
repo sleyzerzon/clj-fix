@@ -7,7 +7,7 @@
             (gloss [core :as g])))
 
 (defrecord Conn [venue host port sender target channel in-seq-num
-                out-seq-num msg-handler next-msg msg-fragment])
+                out-seq-num msg-handler next-msg msg-fragment translate?])
 
 (def sessions (atom {}))
 
@@ -21,12 +21,37 @@
   @@(:channel session))
 
 (defn open-channel? [session]
-  (and (not= nil @(:channel session)) (not (l/closed? (get-channel session)))))
+  (and (not nil? @(:channel session)) (not (l/closed? (get-channel session)))))
+
+(defn- create-channel [session]
+  (if (not (open-channel? session))
+    (do
+      (reset! (:channel session) (a/tcp-client {:host (:host session),
+                                                :port (:port session),
+                                                :frame (g/string :ascii)}))
+      (try (get-channel session)
+        (catch java.net.ConnectException e
+          (reset! (:channel session) nil)
+          (println (.getMessage e)))))
+    (error "Channel already open.")))
+
+(defn gen-msg-handler [id]
+  (fn [msg] (println msg)))
+
+(defn connect 
+  ([id]
+  (connect id false))
+
+  ([id translate-returning-msgs]
+  (if-let [session (get-session id)]
+    (do
+      (reset! (:translate? session) translate-returning-msgs)
+      (create-channel session)
+      (l/receive-all (get-channel session) #((gen-msg-handler id) %)))
+    (error (str "Session " (:id id) " not found. Please create it first.")))))
 
 (defrecord FixConn [id]
   Connection
-  (connect [id])
-
   (logon [id msg-handler heartbeat-interval])
 
   (buy [id size instrument-symbol price & additional-params])
@@ -50,7 +75,8 @@
         (do
           (swap! sessions assoc id (Conn. venue host port sender target
                                           (atom nil) (atom 0) (atom 0)
-                                          (atom nil) (agent "") (atom "")))
+                                          (atom nil) (agent "") (atom "")
+                                          (atom nil)))
         (FixConn. id))
       (error (str "Session " id " already exists. Please close it first."))))
     (error (str "Spec for " venue " failed to load."))))
