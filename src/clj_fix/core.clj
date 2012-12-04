@@ -1,5 +1,6 @@
 (ns clj-fix.core
   (:use clj-fix.connection.protocol)
+  (:use fix-translator.core)
   (:require (clojure [string :as s])
             (lamina [core :as l])
             (aleph [tcp :as a])
@@ -12,6 +13,15 @@
 
 (defn- error [msg]
   (throw (Exception. msg)))
+
+(defn get-session [id]
+  ((:id id) @sessions))
+
+(defn get-channel [session]
+  @@(:channel session))
+
+(defn open-channel? [session]
+  (and (not= nil @(:channel session)) (not (l/closed? (get-channel session)))))
 
 (defrecord FixConn [id]
   Connection
@@ -32,25 +42,19 @@
   (logout [id reason]))
 
 (defn new-fix-session [venue host port sender target]
-  {:pre [(every? string? [venue host sender target]) (integer? port)]}
-  (let [id (keyword (str sender "-" target))]
-    (if (contains? @sessions id)
-      (error (str "Session " id " already exists. Please close it first."))
-      (do
-        (swap! sessions assoc id (Conn. venue host port sender target
-                                        (atom nil) (atom 0) (atom 0)
-                                        (atom nil) (agent "") (atom "")))
-        (FixConn. id)))))
+  {:pre [(keyword? venue) (every? string? [host sender target])
+         (integer? port)]}
+  (if (load-spec venue)
+    (let [id (keyword (str sender "-" target))]
+      (if (not (contains? @sessions id))
+        (do
+          (swap! sessions assoc id (Conn. venue host port sender target
+                                          (atom nil) (atom 0) (atom 0)
+                                          (atom nil) (agent "") (atom "")))
+        (FixConn. id))
+      (error (str "Session " id " already exists. Please close it first."))))
+    (error (str "Spec for " venue " failed to load."))))
 
-(defn get-session [id]
-  ((:id id) @sessions))
-
-(defn get-channel [session]
-  @@(:channel session))
-
-(defn open-channel? [session]
-  (and (not= nil @(:channel session)) (not (l/closed? (get-channel session)))))
- 
 ; This should output the session's details to a file first to aid message
 ; recovery.
 (defn end-session [id]
