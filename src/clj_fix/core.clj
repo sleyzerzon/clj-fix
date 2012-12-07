@@ -57,13 +57,14 @@
 
 (defn gen-msg-sig [session]
   (let [{:keys [out-seq-num sender target]} session]
-    {:msg-seq-num (swap! out-seq-num inc)
+    [:msg-seq-num (swap! out-seq-num inc)
      :sender-comp-id sender
      :target-comp-id target
-     :sending-time (timestamp)}))
+     :sending-time (timestamp)]))
 
 (defn send-msg [session msg-type msg-body]
-  (let [msg (into {:msg-type msg-type} [(gen-msg-sig session) msg-body])
+  (let [msg (reduce #(apply conj % %2) [[:msg-type msg-type]
+                                         (gen-msg-sig session) msg-body])
         encoded-msg (encode-msg (:venue session) msg)]
     (println "clj-fix sending" encoded-msg)
     (l/enqueue (get-channel session) encoded-msg)))
@@ -75,9 +76,9 @@
 
 (defn transmit-heartbeat
   ([session]
-    (send-msg session :heartbeat {}))
+    (send-msg session :heartbeat [[]]))
   ([session test-request-id]
-    (send-msg session :heartbeat {:test-request-id test-request-id})))
+    (send-msg session :heartbeat [:test-request-id test-request-id])))
 
 (defn gen-msg-handler [id]
   (fn [msg]
@@ -120,24 +121,50 @@
       (l/receive-all (get-channel session) #((gen-msg-handler id) %)))
     (error (str "Session " (:id id) " not found. Please create it first.")))))
 
+(defn replace-with-map-val [tag-value-vec tag-value-map]
+  (for [e (partition 2 tag-value-vec)]
+    (if-let [shared-key (find tag-value-map (first e))]
+      shared-key
+      e)))
+
+(defn merge-params [required-tags-values additional-params]
+  (let [reqd-keys (set (take-nth 2 required-tags-values))
+        ts (apply concat (replace-with-map-val required-tags-values
+                                               additional-params))]
+    (reduce
+      (fn [lst [tag value]]
+        (if (contains? reqd-keys tag)
+          lst
+          (conj lst tag value))) (vec ts) (vec additional-params))))
+
 (defrecord FixConn [id]
   Connection
   (logon [id msg-handler heartbeat-interval reset-seq-num
           translate-returning-msgs]
     ; Two things need to be added here:
-    ; 1) Registering the user's msg handler
     ; 2) In the event the user requests a sequence reset, do so.
     (let [session (get-session id)]
       (if (not (open-channel? session))
         (connect id translate-returning-msgs))
       (add-watch (:next-msg session) :user-callback msg-handler)
-      (send-msg session :logon {:heartbeat-interval 0
+      (send-msg session :logon [:heartbeat-interval 0
                                 :reset-seq-num reset-seq-num
-                                :encrypt-method :none})))
+                                :encrypt-method :none])))
 
-  (buy [id size instrument-symbol price & additional-params])
-
-  (sell [id size instrument-symbol price & additional-params])
+  (new-order [id side size instrument-symbol price]
+    (new-order id side size instrument-symbol price nil))
+    
+  (new-order [id side size instrument-symbol price additional-params]
+    (let [session (get-session id)
+          required-tags-values [:client-order-id (str (gensym (name (:id id))))
+                                :hand-inst :private :order-qty size
+                                :order-type :limit :price price
+                                :side side :symbol instrument-symbol
+                                :transact-time (timestamp)]]
+      (if-let [addns additional-params]
+        (send-msg session :new-order-single (merge-params required-tags-values
+                                                          additional-params))
+        (send-msg session :new-order-single required-tags-values))))
 
   (cancel [id order])
 
