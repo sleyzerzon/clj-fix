@@ -141,11 +141,13 @@
   Connection
   (logon [id msg-handler heartbeat-interval reset-seq-num
           translate-returning-msgs]
-    ; Two things need to be added here:
-    ; 2) In the event the user requests a sequence reset, do so.
+    
     (let [session (get-session id)]
       (if (not (open-channel? session))
         (connect id translate-returning-msgs))
+      (if (= reset-seq-num :yes) 
+        (do (reset! (:out-seq-num session) 0)
+            (reset! (:in-seq-num session) 0)))
       (add-watch (:next-msg session) :user-callback msg-handler)
       (send-msg session :logon [:heartbeat-interval 0
                                 :reset-seq-num reset-seq-num
@@ -172,7 +174,8 @@
 
   (order-status [id order])
 
-  (logout [id reason]))
+  (logout [id reason]
+    (send-msg (get-session id) :logout [:text reason])))
 
 (defn new-fix-session [venue host port sender target]
   {:pre [(keyword? venue) (every? string? [host sender target])
