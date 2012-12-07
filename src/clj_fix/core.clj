@@ -96,30 +96,38 @@
                 msg-type (get-msg-type venue m)]
             (println "clj-fix received" m)
             (case msg-type
-              :logon (update-user session {:msg-type msg-type :accepted true
+              :logon (update-user session {:msg-type msg-type
                                            :sender-comp-id (:sender-comp-id
                                                              (decode-msg venue
                                                               msg-type msg))})
               :heartbeat (transmit-heartbeat session)
+
               :test-request (transmit-heartbeat session (:test-request-id
                               (decode-msg venue msg-type msg)))
+
               :reject (println "SESSION REJECT")
-              :execution-report (println "EXECUTION REPORT")
+
+              :execution-report (if @(:translate? session)
+                                  (update-user session (merge 
+                                                        {:msg-type msg-type}
+                                                        (decode-msg venue
+                                                         msg-type msg)))
+                                  (update-user session {:msg-type msg-type
+                                                        :report msg}))
+
               :order-cancel-reject (println "ORDER CANCEL REJECT")
+
               :indication-of-interest (println "INDICATION OF INTEREST")
-              :logout (println "LOGOUT")
+
+              :logout (update-user session {:msg-type msg-type
+                                            :sender-comp-id (:sender-comp-id
+                                                              (decode-msg venue
+                                                              msg-type msg))})
+
               :resend-request (println "RESEND REQUEST")
+              
               :seq-reset (println "SEQUENCE RESET")
               (print "Unknown message type"))))))))
-
-(defn connect 
-  ([id translate-returning-msgs]
-  (if-let [session (get-session id)]
-    (do
-      (reset! (:translate? session) translate-returning-msgs)
-      (create-channel session)
-      (l/receive-all (get-channel session) #((gen-msg-handler id) %)))
-    (error (str "Session " (:id id) " not found. Please create it first.")))))
 
 (defn replace-with-map-val [tag-value-vec tag-value-map]
   (for [e (partition 2 tag-value-vec)]
@@ -136,6 +144,15 @@
         (if (contains? reqd-keys tag)
           lst
           (conj lst tag value))) (vec ts) (vec additional-params))))
+
+(defn connect 
+  ([id translate-returning-msgs]
+  (if-let [session (get-session id)]
+    (do
+      (reset! (:translate? session) translate-returning-msgs)
+      (create-channel session)
+      (l/receive-all (get-channel session) #((gen-msg-handler id) %)))
+    (error (str "Session " (:id id) " not found. Please create it first.")))))
 
 (defrecord FixConn [id]
   Connection
