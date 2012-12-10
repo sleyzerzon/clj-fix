@@ -57,7 +57,7 @@
 
 (defn gen-msg-sig [session]
   (let [{:keys [out-seq-num sender target]} session]
-    [:msg-seq-num (swap! out-seq-num inc)
+    [:msg-seq-num (inc @out-seq-num)
      :sender-comp-id sender
      :target-comp-id target
      :sending-time (timestamp)]))
@@ -65,9 +65,12 @@
 (defn send-msg [session msg-type msg-body]
   (let [msg (reduce #(apply conj % %2) [[:msg-type msg-type]
                                          (gen-msg-sig session) msg-body])
-        encoded-msg (encode-msg (:venue session) msg)]
-    (println "clj-fix sending" encoded-msg)
-    (l/enqueue (get-channel session) encoded-msg)))
+       encoded-msg (encode-msg (:venue session) msg)]
+    (do
+      (println "clj-fix sending" encoded-msg)
+      (l/enqueue (get-channel session) encoded-msg)
+      (swap! (:out-seq-num session) inc))))
+    
 
 (defn update-next-msg [old-msg new-msg] new-msg)
 
@@ -99,11 +102,11 @@
               :logon (update-user session {:msg-type msg-type
                                            :sender-comp-id (:sender-comp-id
                                                              (decode-msg venue
-                                                              msg-type msg))})
+                                                              msg-type m))})
               :heartbeat (transmit-heartbeat session)
 
               :test-request (transmit-heartbeat session (:test-request-id
-                              (decode-msg venue msg-type msg)))
+                              (decode-msg venue msg-type m)))
 
               :reject (println "SESSION REJECT")
 
@@ -111,9 +114,9 @@
                                   (update-user session (merge 
                                                         {:msg-type msg-type}
                                                         (decode-msg venue
-                                                         msg-type msg)))
+                                                         msg-type m)))
                                   (update-user session {:msg-type msg-type
-                                                        :report msg}))
+                                                        :report m}))
 
               :order-cancel-reject (println "ORDER CANCEL REJECT")
 
@@ -122,12 +125,14 @@
               :logout (update-user session {:msg-type msg-type
                                             :sender-comp-id (:sender-comp-id
                                                               (decode-msg venue
-                                                              msg-type msg))})
+                                                              msg-type m))})
 
               :resend-request (println "RESEND REQUEST")
               
               :seq-reset (println "SEQUENCE RESET")
-              (print "Unknown message type"))))))))
+              (print "Unknown message type"))
+  
+            (reset! msg-fragment (peek msgs))))))))
 
 (defn replace-with-map-val [tag-value-vec tag-value-map]
   (for [e (partition 2 tag-value-vec)]
