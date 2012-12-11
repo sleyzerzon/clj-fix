@@ -130,7 +130,7 @@
               :resend-request (println "RESEND REQUEST")
               
               :seq-reset (println "SEQUENCE RESET")
-              (print "Unknown message type"))
+              :unknown-msg-type (println "UNKNOWN MSG TYPE"))
   
             (reset! msg-fragment (peek msgs))))))))
 
@@ -214,15 +214,20 @@
       (error (str "Session " id " already exists. Please close it first."))))
     (error (str "Spec for " venue " failed to load."))))
 
+(defn disconnect [id]
+  (if-let [session (get-session id)]
+    (if (open-channel? session)
+      (l/close (get-channel session)))
+  (error (str "Session " id " not found."))))
+
 ; This should output the session's details to a file first to aid message
 ; recovery.
 (defn end-session [id]
   (if-let [session (get-session id)]
     (do
-      (if (open-channel? session)
-        (l/close (get-channel session)))
+      (disconnect id)
       (swap! sessions dissoc (:id id))
-       true)
+      true)
     (error (str "Session " id " not found."))))
 
 ; This is strictly for utility

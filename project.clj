@@ -1,4 +1,4 @@
-(defproject clj-fix "0.1"
+(defproject clj-fix "0.3"
   :description "FIXME: write description"
   :dependencies [[org.clojure/clojure "1.4.0"]
                  [clj-time "0.4.4"]
