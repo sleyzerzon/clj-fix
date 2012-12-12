@@ -1,6 +1,7 @@
 (ns clj-fix.core
   (:use clj-fix.connection.protocol)
   (:use fix-translator.core)
+  (:use clj-fix-oms.core)
   (:require (clojure [string :as s])
             (lamina [core :as l])
             (aleph [tcp :as a])
@@ -190,7 +191,17 @@
                                                           additional-params))
         (send-msg session :new-order-single required-tags-values))))
 
-  (cancel [id order])
+  ; Remember to check for nil orders.
+  (cancel [id order]
+    (if (not= nil order)
+      (let [session (get-session id)
+            orig-client-order-id (:orig-client-order-id order
+                                  (:client-order-id order))
+            required-tags-values (into (vec (mapcat
+                                     #(find order %)
+              [:client-order-id :order-qty :side :symbol
+               :transact-time])) [:orig-client-order-id orig-client-order-id])]
+        (send-msg session :order-cancel-request required-tags-values))))
 
   (cancel-replace [id order & additional-params])
 
