@@ -6,7 +6,8 @@
   (new-order [id side size instrument-symbol price]
              [id side size instrument-symbol price additional-params])
   (cancel [id order])
-  (cancel-replace [id order & additional-params])
+  (cancel-replace [id order]
+                  [id order additional-params])
   (order-status [id order])
   (logout [id reason]))
 

@@ -191,19 +191,33 @@
                                                           additional-params))
         (send-msg session :new-order-single required-tags-values))))
 
-  ; Remember to check for nil orders.
   (cancel [id order]
     (if (not= nil order)
       (let [session (get-session id)
-            orig-client-order-id (:orig-client-order-id order
-                                  (:client-order-id order))
+            orig-client-order-id (:client-order-id order)
             required-tags-values (into (vec (mapcat
                                      #(find order %)
               [:client-order-id :order-qty :side :symbol
                :transact-time])) [:orig-client-order-id orig-client-order-id])]
         (send-msg session :order-cancel-request required-tags-values))))
 
-  (cancel-replace [id order & additional-params])
+  (cancel-replace [id order]
+    (cancel-replace id order nil))
+
+  (cancel-replace [id order additional-params]
+    (let [session (get-session id)
+          orig-client-order-id (:client-order-id order)
+          required-tags-values (into
+            [:client-order-id (str (gensym (name (:id id))))
+             :orig-client-order-id orig-client-order-id]
+            (vec (mapcat #(find order %)
+              [:hand-inst :order-qty :order-type :price :side :symbol
+               :transact-time])))]
+      (if-let [addns additional-params]
+        (send-msg session :order-cancel-replace-request (merge-params
+                                                   required-tags-values
+                                                   additional-params))
+        (send-msg session :order-cancel-replace-request required-tags-values))))
 
   (order-status [id order])
 
