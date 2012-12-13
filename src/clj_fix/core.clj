@@ -10,6 +10,7 @@
 
 (def ^:const msg-delimiter #"10=\d{3}\u0001")
 (def ^:const msg-identifier #"(?<=10=\d{3}\u0001)")
+(def ^:const seq-num-tag 34)
 
 (defrecord Conn [venue host port sender target channel in-seq-num
                 out-seq-num msg-handler next-msg msg-fragment translate?])
@@ -84,20 +85,28 @@
   ([session test-request-id]
     (send-msg session :heartbeat [:test-request-id test-request-id])))
 
-(defn gen-msg-handler [id]
-  (fn [msg]
-    ; Need to:
-    ; 1) Update inbound sequence number.
-    ; 2) Get more useful information for unknown order message types.
-    (let [session (get-session id)
-          msg-fragment (:msg-fragment session)
-          segments (segment-msg msg)
-          msgs (assoc segments 0 (s/join "" [@msg-fragment (first segments)]))]
+(defn msg-handler [id msg]
+  ; Need to:
+  ; 1) Update inbound sequence number.
+  ; 2) Get more useful information for unknown order message types.
+  ; 3) Significant refactoring.
+  (let [session (get-session id)
+        msg-fragment (:msg-fragment session)
+        segments (segment-msg msg)
+        msgs (assoc segments 0 (s/join "" [@msg-fragment (first segments)]))
+        inbound-seq-num (Integer/parseInt (extract-tag-value seq-num-tag
+                                                             (first msgs)))
+        cur-seq-num (inc @(:in-seq-num session))]
 
+    ; This makes an assumption that, in a block of messages, if the
+    ; sequence number of the first message is as expected, then the rest will
+    ; be as well.
+    (if (= cur-seq-num inbound-seq-num)
       (if-let [msgs-to-proc (butlast msgs)]
         (doseq [m msgs-to-proc]
           (let [venue (:venue session)
-                msg-type (get-msg-type venue m)]
+                msg-type (get-msg-type venue m)
+                _ (swap! (:in-seq-num session) inc)]
             (println "clj-fix received" m)
             (case msg-type
               :logon (update-user session {:msg-type msg-type
@@ -129,11 +138,19 @@
                                                               msg-type m))})
 
               :resend-request (println "RESEND REQUEST")
-              
+            
               :seq-reset (println "SEQUENCE RESET")
               :unknown-msg-type (println "UNKNOWN MSG TYPE"))
   
-            (reset! msg-fragment (peek msgs))))))))
+            (reset! msg-fragment (peek msgs)))))
+       ;(println [inbound-seq-num cur-seq-num]))))
+
+      (send-msg session :resend-request [:begin-seq-num cur-seq-num
+                                         :ending-seq-num 0]))))
+
+(defn gen-msg-handler [id]
+  (fn [msg]
+    (msg-handler id msg)))
 
 (defn replace-with-map-val [tag-value-vec tag-value-map]
   (for [e (partition 2 tag-value-vec)]
