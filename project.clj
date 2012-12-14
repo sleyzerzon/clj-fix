@@ -1,6 +1,6 @@
 (defproject clj-fix "0.3"
   :description "A Clojure API for FIX communication"
-  :url "https://github.com/nitinpunjabi/clj-fix-oms"
+  :url "https://github.com/nitinpunjabi/clj-fix"
   :dependencies [[org.clojure/clojure "1.4.0"]
                  [clj-time "0.4.4"]
                  [aleph "0.3.0-beta8"] 
