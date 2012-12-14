@@ -1,7 +1,6 @@
 (ns clj-fix.core
   (:use clj-fix.connection.protocol)
   (:use fix-translator.core)
-  (:use clj-fix-oms.core)
   (:require (clojure [string :as s])
             (lamina [core :as l])
             (aleph [tcp :as a])
