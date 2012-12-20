@@ -58,7 +58,7 @@
 
 (defn gen-msg-sig [session]
   (let [{:keys [out-seq-num sender target]} session]
-    [:msg-seq-num (inc @out-seq-num)
+    [:msg-seq-num (swap! (:out-seq-num session) inc)
      :sender-comp-id sender
      :target-comp-id target
      :sending-time (timestamp)]))
@@ -69,10 +69,8 @@
        encoded-msg (encode-msg (:venue session) msg)]
     (do
       (println "clj-fix sending" encoded-msg)
-      (l/enqueue (get-channel session) encoded-msg)
-      (swap! (:out-seq-num session) inc))))
+      (l/enqueue (get-channel session) encoded-msg))))
     
-
 (defn update-next-msg [old-msg new-msg] new-msg)
 
 (defn update-user [session payload]

@@ -7,5 +7,5 @@
                  [lamina "0.5.0-beta8"]
                  [gloss "0.2.2-beta3"]
                  [edw/ordered "1.3.2"]
-                 [fix-translator "1.01"]]
+                 [fix-translator "1.02"]]
   :main clj-fix.core)
