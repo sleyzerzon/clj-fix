@@ -14,7 +14,7 @@
 (def sessions (atom {}))
 (def order-id-prefix (atom 0))
 
-(defrecord Conn [venue host port sender target channel in-seq-num
+(defrecord Conn [label venue host port sender target channel in-seq-num
                 out-seq-num msg-handler next-msg msg-fragment translate?])
 
 (defn timestamp
@@ -239,20 +239,19 @@
   (logout [id reason]
     (send-msg (get-session id) :logout [:text reason])))
 
-(defn new-fix-session [venue host port sender target]
-  {:pre [(keyword? venue) (every? string? [host sender target])
-         (integer? port)]}
-  (if (load-spec venue)
-    (let [id (keyword (str sender "-" target))]
-      (if (not (contains? @sessions id))
-        (do
-          (swap! sessions assoc id (Conn. venue host port sender target
-                                          (atom nil) (atom 0) (atom 0)
-                                          (atom nil) (agent {}) (atom "")
-                                          (atom nil)))
-        (FixConn. id))
-      (error (str "Session " id " already exists. Please close it first."))))
-    (error (str "Spec for " venue " failed to load."))))
+(defn new-fix-session [label venue-name host port sender target]
+  (let [venue (keyword venue-name)]
+    (if (load-spec venue)
+      (let [id (keyword (str sender "-" target))]
+        (if (not (contains? @sessions id))
+          (do
+            (swap! sessions assoc id (Conn. label venue host port sender target
+                                            (atom nil) (atom 0) (atom 0)
+                                            (atom nil) (agent {}) (atom "")
+                                            (atom nil)))
+          (FixConn. id))
+        (error (str "Session " id " already exists. Please close it first."))))
+      (error (str "Spec for " venue " failed to load.")))))
 
 (defn disconnect [id]
   (if-let [session (get-session id)]
@@ -260,15 +259,33 @@
       (l/close (get-channel session)))
   (error (str "Session " id " not found."))))
 
+(defn write-session [id]
+  (let [config (c/parse-string (slurp "config/clients.cfg") true)
+        session (get-session id)
+        client-label (:label session)]
+    (spit "config/clients.cfg" (c/generate-string
+      (assoc-in
+        (assoc-in
+          (assoc-in config [client-label :last-logout] (timestamp "yyyyMMdd"))
+            [client-label :inbound-seq-num] @(:in-seq-num session))
+             [client-label :outbound-seq-num] @(:out-seq-num session))
+      {:pretty true}))))
+
 ; This should output the session's details to a file first to aid message
 ; recovery.
 (defn end-session [id]
   (if-let [session (get-session id)]
     (do
       (disconnect id)
+      (write-session id)
       (swap! sessions dissoc (:id id))
       true)
     (error (str "Session " id " not found."))))
+
+(defn write-system-config [file date order-id-prefix]
+  (spit file (c/generate-string {:last-startup date
+                                 :order-id-prefix order-id-prefix}
+                                {:pretty true})))
 
 (defn initialize [config-file]
   (let [today (timestamp "yyyyMMdd")
@@ -278,16 +295,13 @@
         (if (= today (:last-startup config))
           (do
             (reset! order-id-prefix (inc (:order-id-prefix config)))
-            (spit file (c/generate-string {:last-startup today 
-                                           :order-id-prefix @order-id-prefix})))
+            (write-system-config file today @order-id-prefix))
           (do
-            (spit file (c/generate-string {:last-startup today 
-                                           :order-id-prefix 0}))
+            (write-system-config file today 0)
             (initialize config-file))))
       (catch Exception e
         (do
-          (spit file (c/generate-string {:last-startup today 
-                                         :order-id-prefix 0}))
+          (write-system-config file today 0)
           (initialize config-file))))))
 
 (defn get-connectivity-info [client-name]
@@ -299,6 +313,24 @@
       [(keyword venue) ip-address (Integer/parseInt port) sender target])))
 
 (initialize "global")
+
+(defn update-fix-session [id inbound-seq-num outbound-seq-num]
+  (let [session (get-session id)]
+    (reset! (:in-seq-num session) inbound-seq-num)
+    (reset! (:out-seq-num session) outbound-seq-num)))
+
+(defn load-client [client-label]
+  (try
+    (if-let [config (client-label (c/parse-string (slurp "config/clients.cfg")
+                                                  true))]
+      (let [{:keys [venue host port sender target last-logout inbound-seq-num
+                    outbound-seq-num]} config
+            fix-session (new-fix-session client-label venue host port sender
+                                         target)]
+        (if (= last-logout (timestamp "yyyyMMdd"))
+          (update-fix-session fix-session inbound-seq-num outbound-seq-num))
+          fix-session))
+  (catch Exception e (println (.getMessage e)))))
 
 ; This is strictly for utility; will be removed.
 (defn close-all []
