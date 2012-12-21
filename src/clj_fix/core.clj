@@ -5,11 +5,14 @@
             (lamina [core :as l])
             (aleph [tcp :as a])
             (gloss [core :as g])
+            (cheshire [core :as c])
             (clj-time [core :as t] [format :as f])))
 
 (def ^:const msg-delimiter #"10=\d{3}\u0001")
 (def ^:const msg-identifier #"(?<=10=\d{3}\u0001)")
 (def ^:const seq-num-tag 34)
+(def sessions (atom {}))
+(def order-id-prefix (atom 0))
 
 (defrecord Conn [venue host port sender target channel in-seq-num
                 out-seq-num msg-handler next-msg msg-fragment translate?])
@@ -20,8 +23,6 @@
     (timestamp "yyyyMMdd-HH:mm:ss"))
   ([format]
     (f/unparse (f/formatter format) (t/now))))
-
-(def sessions (atom {}))
 
 (defn- error [msg]
   (throw (Exception. msg)))
@@ -195,7 +196,7 @@
     
   (new-order [id side size instrument-symbol price additional-params]
     (let [session (get-session id)
-          required-tags-values [:client-order-id (str (gensym (name (:id id))))
+          required-tags-values [:client-order-id (str (gensym @order-id-prefix))
                                 :hand-inst :private :order-qty size
                                 :order-type :limit :price price
                                 :side side :symbol instrument-symbol
@@ -269,6 +270,36 @@
       true)
     (error (str "Session " id " not found."))))
 
-; This is strictly for utility
+(defn initialize [config-file]
+  (let [today (timestamp "yyyyMMdd")
+        file (str "config/" config-file ".cfg")]
+    (try
+      (if-let [config (c/parse-string (slurp file) true)]
+        (if (= today (:last-startup config))
+          (do
+            (reset! order-id-prefix (inc (:order-id-prefix config)))
+            (spit file (c/generate-string {:last-startup today 
+                                           :order-id-prefix @order-id-prefix})))
+          (do
+            (spit file (c/generate-string {:last-startup today 
+                                           :order-id-prefix 0}))
+            (initialize config-file))))
+      (catch Exception e
+        (do
+          (spit file (c/generate-string {:last-startup today 
+                                         :order-id-prefix 0}))
+          (initialize config-file))))))
+
+(defn get-connectivity-info [client-name]
+  (let [configs (c/parse-string (slurp "config/connectivity.cfg") true)
+        conn-info (client-name configs)
+        {:keys [venue ip-address port sender target]} conn-info]
+    (if (nil? conn-info)
+      nil
+      [(keyword venue) ip-address (Integer/parseInt port) sender target])))
+
+(initialize "global")
+
+; This is strictly for utility; will be removed.
 (defn close-all []
     (reset! sessions {}))
