@@ -271,8 +271,6 @@
              [client-label :outbound-seq-num] @(:out-seq-num session))
       {:pretty true}))))
 
-; This should output the session's details to a file first to aid message
-; recovery.
 (defn end-session [id]
   (if-let [session (get-session id)]
     (do
