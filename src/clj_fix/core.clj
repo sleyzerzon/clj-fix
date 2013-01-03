@@ -302,14 +302,6 @@
           (write-system-config file today 0)
           (initialize config-file))))))
 
-(defn get-connectivity-info [client-name]
-  (let [configs (c/parse-string (slurp "config/connectivity.cfg") true)
-        conn-info (client-name configs)
-        {:keys [venue ip-address port sender target]} conn-info]
-    (if (nil? conn-info)
-      nil
-      [(keyword venue) ip-address (Integer/parseInt port) sender target])))
-
 (initialize "global")
 
 (defn update-fix-session [id inbound-seq-num outbound-seq-num]
