@@ -15,28 +15,39 @@
 (def order-id-prefix (atom 0))
 
 (defrecord Conn [label venue host port sender target channel in-seq-num
-                out-seq-num msg-handler next-msg msg-fragment translate?])
+                out-seq-num next-msg msg-fragment translate?])
 
 (defn timestamp
-  ; Returns a UTC timestamp in a specified format.
+  "Returns a UTC timestamp in a specified format."
   ([]
     (timestamp "yyyyMMdd-HH:mm:ss"))
   ([format]
     (f/unparse (f/formatter format) (t/now))))
 
-(defn- error [msg]
+(defn- error
+  "Throws an exception with a user-supplied msg."
+  [msg]
   (throw (Exception. msg)))
 
-(defn get-session [id]
+(defn get-session 
+  "Returns the session details belonging to a session id."
+  [id]
   ((:id id) @sessions))
 
-(defn get-channel [session]
+(defn get-channel
+  "Returns the channel used by a session."
+  [session]
   @@(:channel session))
 
-(defn open-channel? [session]
+(defn open-channel?
+  "Returns whether a session's channel is open."
+  [session]
   (and (not= nil @(:channel session)) (not (l/closed? (get-channel session)))))
 
-(defn- create-channel [session]
+(defn create-channel
+  "If a session doesn't already have an open channel, then create a new one and
+   assign it to the session."
+  [session]
   (if (not (open-channel? session))
     (do
       (reset! (:channel session) (a/tcp-client {:host (:host session),
@@ -49,22 +60,29 @@
     (error "Channel already open.")))
 
 (defn segment-msg
-  ; Takes a TCP segment and splits it into individual FIX messages. If the last
-  ; message in the collection is complete, appends a blank
+  "Takes a TCP segment and splits it into a collection of individual FIX
+   messages. If the last message in the collection is complete, it appends a
+   blank for easier handling."
   [msg]
   (let [segments (s/split msg msg-identifier)]
     (if (re-find msg-delimiter (peek segments))
       (conj segments "")
       segments)))
 
-(defn gen-msg-sig [session]
+(defn gen-msg-sig
+  "Returns a vector of spec-neutral tags and their values as required to create
+   a FIX message header."
+  [session]
   (let [{:keys [out-seq-num sender target]} session]
     [:msg-seq-num (swap! (:out-seq-num session) inc)
      :sender-comp-id sender
      :target-comp-id target
      :sending-time (timestamp)]))
 
-(defn send-msg [session msg-type msg-body]
+(defn send-msg
+  "Transforms a vector of spec-neutral tags and their values in the form [t0 v0
+   t1 v1 ...] into a FIX message, then sends it through the session's channel."
+  [session msg-type msg-body]
   (let [msg (reduce #(apply conj % %2) [[:msg-type msg-type]
                                          (gen-msg-sig session) msg-body])
        encoded-msg (encode-msg (:venue session) msg)]
@@ -72,9 +90,13 @@
       (println "clj-fix sending" encoded-msg)
       (l/enqueue (get-channel session) encoded-msg))))
     
-(defn update-next-msg [old-msg new-msg] new-msg)
+(defn update-next-msg
+  "Updates a session's next message agent."
+  [old-msg new-msg] new-msg)
 
-(defn update-user [session payload]
+(defn update-user
+  "Sends the latest inbound order message to a session's next message agent."
+  [session payload]
   (send (:next-msg session) update-next-msg payload))
 
 (defn transmit-heartbeat
@@ -83,11 +105,10 @@
   ([session test-request-id]
     (send-msg session :heartbeat [:test-request-id test-request-id])))
 
-(defn msg-handler [id msg]
-  ; Need to:
-  ; 1) Update inbound sequence number.
-  ; 2) Get more useful information for unknown order message types.
-  ; 3) Significant refactoring.
+(defn msg-handler
+  "Segments an inbound block of messages into individual messages, and processes
+   them sequentially."
+  [id msg]
   (let [session (get-session id)
         msg-fragment (:msg-fragment session)
         segments (segment-msg msg)
@@ -141,22 +162,31 @@
               :unknown-msg-type (println "UNKNOWN MSG TYPE"))
   
             (reset! msg-fragment (peek msgs)))))
-       ;(println [inbound-seq-num cur-seq-num]))))
 
       (send-msg session :resend-request [:begin-seq-num cur-seq-num
                                          :ending-seq-num 0]))))
 
-(defn gen-msg-handler [id]
+(defn gen-msg-handler
+  "Returns a message handler for the session's channel."
+  [id]
   (fn [msg]
     (msg-handler id msg)))
 
-(defn replace-with-map-val [tag-value-vec tag-value-map]
+(defn replace-with-map-val
+  "Takes a vector of tag-value pairs and a map of tag-value pairs. For each tag
+   that is present only in the vector, return it. For each tag that is present
+   in both the vector and the map, return the map pair."
+  [tag-value-vec tag-value-map]
   (for [e (partition 2 tag-value-vec)]
     (if-let [shared-key (find tag-value-map (first e))]
       shared-key
       e)))
 
-(defn merge-params [required-tags-values additional-params]
+(defn merge-params
+  "Takes a vector of tag-value pairs and a map of tag-value pairs, and
+   merges them. For any tag that's present in both, take the value from the
+   map."
+  [required-tags-values additional-params]
   (let [reqd-keys (set (take-nth 2 required-tags-values))
         ts (apply concat (replace-with-map-val required-tags-values
                                                additional-params))]
@@ -166,7 +196,8 @@
           lst
           (conj lst tag value))) (vec ts) (vec additional-params))))
 
-(defn connect 
+(defn connect
+  "Connect a session's channel." 
   ([id translate-returning-msgs]
   (if-let [session (get-session id)]
     (do
@@ -177,8 +208,8 @@
 
 (defrecord FixConn [id]
   Connection
-  (logon [id msg-handler heartbeat-interval reset-seq-num
-          translate-returning-msgs]
+  (logon
+    [id msg-handler heartbeat-interval reset-seq-num translate-returning-msgs]
     
     (let [session (get-session id)]
       (if (not (open-channel? session))
@@ -239,7 +270,9 @@
   (logout [id reason]
     (send-msg (get-session id) :logout [:text reason])))
 
-(defn new-fix-session [label venue-name host port sender target]
+(defn new-fix-session
+  "Create a new FIX session and add it to sessions collection."
+  [label venue-name host port sender target]
   (let [venue (keyword venue-name)]
     (if (load-spec venue)
       (let [id (keyword (str sender "-" target))]
@@ -247,19 +280,22 @@
           (do
             (swap! sessions assoc id (Conn. label venue host port sender target
                                             (atom nil) (atom 0) (atom 0)
-                                            (atom nil) (agent {}) (atom "")
-                                            (atom nil)))
+                                            (agent {}) (atom "") (atom nil)))
           (FixConn. id))
         (error (str "Session " id " already exists. Please close it first."))))
       (error (str "Spec for " venue " failed to load.")))))
 
-(defn disconnect [id]
+(defn disconnect
+  "Disconnect from a FIX session without logging out."
+  [id]
   (if-let [session (get-session id)]
     (if (open-channel? session)
       (l/close (get-channel session)))
   (error (str "Session " id " not found."))))
 
-(defn write-session [id]
+(defn write-session 
+  "Write the details of a session to a config file for sequence tracking."
+  [id]
   (let [config (c/parse-string (slurp "config/clients.cfg") true)
         session (get-session id)
         client-label (:label session)]
@@ -271,7 +307,9 @@
              [client-label :outbound-seq-num] @(:out-seq-num session))
       {:pretty true}))))
 
-(defn end-session [id]
+(defn end-session 
+  "End a session and remove it from the sessions collection."
+  [id]
   (if-let [session (get-session id)]
     (do
       (disconnect id)
@@ -280,12 +318,19 @@
       true)
     (error (str "Session " id " not found."))))
 
-(defn write-system-config [file date order-id-prefix]
+(defn write-system-config
+  "Write clj-fix initialization details to a configuration file. This file
+   tracks the number of times clj-fix has been initialized in order to set the
+   order-id-prefix to ensure unique client order ids."
+  [file date order-id-prefix]
   (spit file (c/generate-string {:last-startup date
                                  :order-id-prefix order-id-prefix}
                                 {:pretty true})))
 
-(defn initialize [config-file]
+(defn initialize
+  "Initialize clj-fix. All this does is set the order-id-prefix to ensure unique
+   client order ids for the session."
+  [config-file]
   (let [today (timestamp "yyyyMMdd")
         file (str "config/" config-file ".cfg")]
     (try
@@ -304,24 +349,29 @@
 
 (initialize "global")
 
-(defn update-fix-session [id inbound-seq-num outbound-seq-num]
+(defn update-fix-session
+  "Sets a session's sequence numbers to supplied values."
+  [id inbound-seq-num outbound-seq-num]
   (let [session (get-session id)]
     (reset! (:in-seq-num session) inbound-seq-num)
     (reset! (:out-seq-num session) outbound-seq-num)))
 
-(defn load-client [client-label]
-  (try
-    (if-let [config (client-label (c/parse-string (slurp "config/clients.cfg")
-                                                  true))]
-      (let [{:keys [venue host port sender target last-logout inbound-seq-num
-                    outbound-seq-num]} config
-            fix-session (new-fix-session client-label venue host port sender
-                                         target)]
-        (if (= last-logout (timestamp "yyyyMMdd"))
-          (update-fix-session fix-session inbound-seq-num outbound-seq-num))
-          fix-session))
-  (catch Exception e (println (.getMessage e)))))
+(defn load-client
+  "Loads client details from a configuration file and creates a new fix
+   session from it."
+  [client-label]
+  (if-let [config (client-label (c/parse-string (slurp "config/clients.cfg")
+                                                true))]
+    (let [{:keys [venue host port sender target last-logout inbound-seq-num
+                  outbound-seq-num]} config
+          fix-session (new-fix-session client-label venue host port sender
+                                       target)]
+      (if (= last-logout (timestamp "yyyyMMdd"))
+        (update-fix-session fix-session inbound-seq-num outbound-seq-num))
+        fix-session)))
 
-; This is strictly for utility; will be removed.
-(defn close-all []
-    (reset! sessions {}))
+(defn close-all
+  "Clears the session collection. This is strictly for utility and will be
+   removed."
+  []
+  (reset! sessions {}))

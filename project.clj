@@ -1,4 +1,4 @@
-(defproject clj-fix "0.5.1"
+(defproject clj-fix "0.5.3"
   :description "A Clojure API for FIX communication"
   :url "https://github.com/nitinpunjabi/clj-fix"
   :dependencies [[org.clojure/clojure "1.4.0"]
@@ -7,6 +7,6 @@
                  [lamina "0.5.0-beta8"]
                  [gloss "0.2.2-beta3"]
                  [edw/ordered "1.3.2"]
-                 [fix-translator "1.04"]
+                 [fix-translator "1.05"]
                  [cheshire "5.0.0"]]
   :main clj-fix.core)
