@@ -87,7 +87,7 @@
                                          (gen-msg-sig session) msg-body])
        encoded-msg (encode-msg (:venue session) msg)]
     (do
-      (println "clj-fix sending" encoded-msg)
+      ;(println "clj-fix sending" encoded-msg)
       (l/enqueue (get-channel session) encoded-msg))))
     
 (defn update-next-msg
@@ -126,7 +126,7 @@
           (let [venue (:venue session)
                 msg-type (get-msg-type venue m)
                 _ (swap! (:in-seq-num session) inc)]
-            (println "clj-fix received" m)
+            ;(println "clj-fix received" m)
             (case msg-type
               :logon (update-user session {:msg-type msg-type
                                            :sender-comp-id (:sender-comp-id
