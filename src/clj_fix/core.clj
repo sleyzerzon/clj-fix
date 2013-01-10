@@ -111,21 +111,18 @@
   [id msg]
   (let [session (get-session id)
         msg-fragment (:msg-fragment session)
-        segments (segment-msg msg)
-        msgs (assoc segments 0 (s/join "" [@msg-fragment (first segments)]))
-        inbound-seq-num (Integer/parseInt (extract-tag-value seq-num-tag
-                                                             (first msgs)))
-        cur-seq-num (inc @(:in-seq-num session))]
+        segments (segment-msg (str @msg-fragment msg))
+        lead-msg (first segments)]
 
-    ; This makes an assumption that, in a block of messages, if the
-    ; sequence number of the first message is as expected, then the rest will
-    ; be as well.
-    (if (= cur-seq-num inbound-seq-num)
-      (if-let [msgs-to-proc (butlast msgs)]
-        (doseq [m msgs-to-proc]
-          (let [venue (:venue session)
-                msg-type (get-msg-type venue m)
-                _ (swap! (:in-seq-num session) inc)]
+    (if (re-find msg-delimiter lead-msg)
+      (let [inbound-seq-num (Integer/parseInt (extract-tag-value seq-num-tag
+                                               lead-msg))
+            cur-seq-num (inc @(:in-seq-num session))]
+        (if (= inbound-seq-num cur-seq-num)
+          (doseq [m (butlast segments)]
+            (let [venue (:venue session)
+                  msg-type (get-msg-type venue m)
+                  _ (swap! (:in-seq-num session) inc)]
             ;(println "clj-fix received" m)
             (case msg-type
               :logon (update-user session {:msg-type msg-type
@@ -159,12 +156,11 @@
               :resend-request (println "RESEND REQUEST")
             
               :seq-reset (println "SEQUENCE RESET")
-              :unknown-msg-type (println "UNKNOWN MSG TYPE"))
-  
-            (reset! msg-fragment (peek msgs)))))
-
-      (send-msg session :resend-request [:begin-seq-num cur-seq-num
-                                         :ending-seq-num 0]))))
+              :unknown-msg-type (println "UNKNOWN MSG TYPE"))))
+          (send-msg session :resend-request [:begin-seq-num cur-seq-num
+                                             :ending-seq-num 0]))))
+    
+      (reset! msg-fragment (peek segments))))
 
 (defn gen-msg-handler
   "Returns a message handler for the session's channel."
