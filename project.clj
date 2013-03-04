@@ -1,4 +1,4 @@
-(defproject clj-fix "0.5.6"
+(defproject clj-fix "0.6.1"
   :description "A Clojure API for FIX communication"
   :url "https://github.com/nitinpunjabi/clj-fix"
   :dependencies [[org.clojure/clojure "1.4.0"]

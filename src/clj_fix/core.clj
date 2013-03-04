@@ -8,9 +8,14 @@
             (cheshire [core :as c])
             (clj-time [core :as t] [format :as f])))
 
+; FIX messages end with '10=xxx' where 'xxx' is a three-digit checksum
+; left-padded with zeroes.
 (def ^:const msg-delimiter #"10=\d{3}\u0001")
 (def ^:const msg-identifier #"(?<=10=\d{3}\u0001)")
+
+; The standard tag value for FIX message sequence numbers.
 (def ^:const seq-num-tag 34)
+
 (def sessions (atom {}))
 (def order-id-prefix (atom 0))
 
@@ -18,28 +23,35 @@
                 out-seq-num next-msg msg-fragment translate?])
 
 (defn timestamp
+  "Returns a UTC timestamp in a specified format."
   ([]
     (timestamp "yyyyMMdd-HH:mm:ss"))
   ([format]
     (f/unparse (f/formatter format) (t/now))))
 
 (defn- error
+  "Throws an exception with a user-supplied msg."
   [msg]
   (throw (Exception. msg)))
 
 (defn get-session 
+  "Returns the session details belonging to a session id."
   [id]
   ((:id id) @sessions))
 
 (defn get-channel
+  "Returns the channel used by a session."
   [session]
   @@(:channel session))
 
 (defn open-channel?
+  "Returns whether a session's channel is open."
   [session]
   (and (not= nil @(:channel session)) (not (l/closed? (get-channel session)))))
 
 (defn create-channel
+  "If a session doesn't already have an open channel, then create a new one and
+   assign it to the session."
   [session]
   (if (not (open-channel? session))
     (do
@@ -53,6 +65,9 @@
     (error "Channel already open.")))
 
 (defn segment-msg
+  "Takes a TCP segment and splits it into a collection of individual FIX
+   messages. If the last message in the collection is complete, it appends an
+   empty string."
   [msg]
   (let [segments (s/split msg msg-identifier)]
     (if (re-find msg-delimiter (peek segments))
@@ -60,6 +75,8 @@
       segments)))
 
 (defn gen-msg-sig
+  "Returns a vector of spec-neutral tags and their values as required to create
+   a FIX message header."
   [session]
   (let [{:keys [out-seq-num sender target]} session]
     [:msg-seq-num (swap! (:out-seq-num session) inc)
@@ -68,18 +85,21 @@
      :sending-time (timestamp)]))
 
 (defn send-msg
+  "Transforms a vector of spec-neutral tags and their values in the form [t0 v0
+   t1 v1 ...] into a FIX message, then sends it through the session's channel."
   [session msg-type msg-body]
   (let [msg (reduce #(apply conj % %2) [[:msg-type msg-type]
                                          (gen-msg-sig session) msg-body])
        encoded-msg (encode-msg (:venue session) msg)]
-    (do
-      ;(println "clj-fix sending" encoded-msg)
-      (l/enqueue (get-channel session) encoded-msg))))
-    
+     (l/enqueue (get-channel session) encoded-msg)))
+
 (defn update-next-msg
   [old-msg new-msg] new-msg)
 
 (defn update-user
+  "Updates a session's next message agent. This agent holds the latest FIX
+   message expected to be processed by the user. A user-supplied watcher is
+   attached to this agent."
   [session payload]
   (send (:next-msg session) update-next-msg payload))
 
@@ -89,67 +109,101 @@
   ([session test-request-id]
     (send-msg session :heartbeat [:test-request-id test-request-id])))
 
+(defn logon-accepted [msg-type msg session]
+  (let [venue (:venue session)]
+    (update-user session {:msg-type msg-type
+                          :sender-comp-id (:sender-comp-id
+                                          (decode-msg venue msg-type msg))})))
+
+(defn heartbeat [session]
+  (transmit-heartbeat session))
+
+(defn test-request [msg-type msg session]
+  (let [venue (:venue session)]
+    (transmit-heartbeat session (:test-request-id (decode-msg venue msg-type 
+                                                              msg)))))
+
+(defn session-reject []
+  (println "SESSION REJECT"))
+
+(defn execution-report [msg-type msg session]
+  (let [venue (:venue session)]
+    (if @(:translate? session)
+      (update-user session (merge {:msg-type msg-type}
+                                  (decode-msg venue msg-type msg)))
+      (update-user session {:msg-type msg-type :report msg}))))
+
+(defn order-cancel-reject []
+  (println "ORDER CANCEL REJECT"))
+
+(defn logout-accepted [msg-type msg session]
+  (let [venue (:venue session)]
+    (update-user session {:msg-type msg-type
+                          :sender-comp-id (:sender-comp-id
+                                            (decode-msg (:venue session)
+                                                         msg-type msg))})))
+
+(defn resend-request []
+  (println "RESEND REQUEST"))
+
+(defn sequence-reset []
+  (println "SEQUENCE RESET"))
+
 (defn msg-handler
+  "Segments an inbound block of messages into individual messages, and processes
+   them sequentially."
   [id msg]
   (let [session (get-session id)
         msg-fragment (:msg-fragment session)
         segments (segment-msg (str @msg-fragment msg))
         lead-msg (first segments)]
 
+    ; Proceed with processing if there is at least one complete message in
+    ; the collection.
     (if (re-find msg-delimiter lead-msg)
       (let [inbound-seq-num (Integer/parseInt (extract-tag-value seq-num-tag
                                                lead-msg))
             cur-seq-num (inc @(:in-seq-num session))]
         (if (= inbound-seq-num cur-seq-num)
           (doseq [m (butlast segments)]
-            (let [venue (:venue session)
-                  msg-type (get-msg-type venue m)
+            (let [msg-type (get-msg-type (:venue session) m)
                   _ (swap! (:in-seq-num session) inc)]
-            ;(println "clj-fix received" m)
             (case msg-type
-              :logon (update-user session {:msg-type msg-type
-                                           :sender-comp-id (:sender-comp-id
-                                                             (decode-msg venue
-                                                              msg-type m))})
+              :logon (logon-accepted msg-type m session)
+
               :heartbeat (transmit-heartbeat session)
 
-              :test-request (transmit-heartbeat session (:test-request-id
-                              (decode-msg venue msg-type m)))
+              :test-request (test-request msg-type m session)
 
-              :reject (println "SESSION REJECT")
+              :reject (session-reject)
 
-              :execution-report (if @(:translate? session)
-                                  (update-user session (merge 
-                                                        {:msg-type msg-type}
-                                                        (decode-msg venue
-                                                         msg-type m)))
-                                  (update-user session {:msg-type msg-type
-                                                        :report m}))
+              :execution-report (execution-report msg-type m session)
 
-              :order-cancel-reject (println "ORDER CANCEL REJECT")
+              :order-cancel-reject (order-cancel-reject)
 
-              :indication-of-interest (println "INDICATION OF INTEREST")
+              :logout (logout-accepted msg-type m session)
 
-              :logout (update-user session {:msg-type msg-type
-                                            :sender-comp-id (:sender-comp-id
-                                                              (decode-msg venue
-                                                              msg-type m))})
+              :resend-request (resend-request)
 
-              :resend-request (println "RESEND REQUEST")
-            
-              :seq-reset (println "SEQUENCE RESET")
-              :unknown-msg-type (println "UNKNOWN MSG TYPE"))))
+              :seq-reset (sequence-reset)
+              
+              :unknown-msg-type (error "UNKNOWN MSG TYPE"))))
+
           (send-msg session :resend-request [:begin-seq-num cur-seq-num
                                              :ending-seq-num 0]))))
     
       (reset! msg-fragment (peek segments))))
 
 (defn gen-msg-handler
+  "Returns a message handler for the session's channel."
   [id]
   (fn [msg]
     (msg-handler id msg)))
 
 (defn replace-with-map-val
+  "Takes a vector of tag-value pairs and a map of tag-value pairs. For each tag
+   that is present only in the vector, return it. For each tag that is present
+   in both the vector and the map, return the map pair."
   [tag-value-vec tag-value-map]
   (for [e (partition 2 tag-value-vec)]
     (if-let [shared-key (find tag-value-map (first e))]
@@ -157,6 +211,9 @@
       e)))
 
 (defn merge-params
+  "Takes a vector of tag-value pairs and a map of tag-value pairs, and
+   merges them. For any tag that's present in both, take the value from the
+   map."
   [required-tags-values additional-params]
   (let [reqd-keys (set (take-nth 2 required-tags-values))
         ts (apply concat (replace-with-map-val required-tags-values
@@ -168,6 +225,7 @@
           (conj lst tag value))) (vec ts) (vec additional-params))))
 
 (defn connect
+  "Connect a session's channel." 
   ([id translate-returning-msgs]
   (if-let [session (get-session id)]
     (do
@@ -241,6 +299,7 @@
     (send-msg (get-session id) :logout [:text reason])))
 
 (defn new-fix-session
+  "Create a new FIX session and add it to sessions collection."
   [label venue-name host port sender target]
   (let [venue (keyword venue-name)]
     (if (load-spec venue)
@@ -255,13 +314,15 @@
       (error (str "Spec for " venue " failed to load.")))))
 
 (defn disconnect
+  "Disconnect from a FIX session without logging out."
   [id]
   (if-let [session (get-session id)]
     (if (open-channel? session)
       (l/close (get-channel session)))
   (error (str "Session " id " not found."))))
 
-(defn write-session 
+(defn write-session
+  "Write the details of a session to a config file for sequence tracking."
   [id]
   (let [config (c/parse-string (slurp "config/clients.cfg") true)
         session (get-session id)
@@ -274,7 +335,8 @@
              [client-label :outbound-seq-num] @(:out-seq-num session))
       {:pretty true}))))
 
-(defn end-session 
+(defn end-session
+  "End a session and remove it from the sessions collection."
   [id]
   (if-let [session (get-session id)]
     (do
@@ -285,12 +347,17 @@
     (error (str "Session " id " not found."))))
 
 (defn write-system-config
+  "Write clj-fix initialization details to a configuration file. This file
+   tracks the number of times clj-fix has been initialized in order to set the
+   order-id-prefix to ensure unique client order ids."
   [file date order-id-prefix]
   (spit file (c/generate-string {:last-startup date
                                  :order-id-prefix order-id-prefix}
                                 {:pretty true})))
 
 (defn initialize
+  "Initialize clj-fix. All this does is set the order-id-prefix to ensure unique
+   client order ids for the session."
   [config-file]
   (let [today (timestamp "yyyyMMdd")
         file (str "config/" config-file ".cfg")]
@@ -311,12 +378,15 @@
 (initialize "global")
 
 (defn update-fix-session
+  "Sets a session's sequence numbers to supplied values."
   [id inbound-seq-num outbound-seq-num]
   (let [session (get-session id)]
     (reset! (:in-seq-num session) inbound-seq-num)
     (reset! (:out-seq-num session) outbound-seq-num)))
 
 (defn load-client
+  "Loads client details from a configuration file and creates a new fix
+   session from it."
   [client-label]
   (if-let [config (client-label (c/parse-string (slurp "config/clients.cfg")
                                                 true))]
@@ -329,5 +399,7 @@
         fix-session)))
 
 (defn close-all
+  "Clears the session collection. This is strictly for utility and will be
+   removed."
   []
   (reset! sessions {}))
