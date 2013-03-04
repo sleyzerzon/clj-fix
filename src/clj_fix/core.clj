@@ -22,6 +22,8 @@
 (defrecord Conn [label venue host port sender target channel in-seq-num
                 out-seq-num next-msg msg-fragment translate?])
 
+(declare disconnect)
+
 (defn timestamp
   "Returns a UTC timestamp in a specified format."
   ([]
@@ -123,7 +125,7 @@
     (transmit-heartbeat session (:test-request-id (decode-msg venue msg-type 
                                                               msg)))))
 
-(defn session-reject []
+(defn session-reject [])
   (println "SESSION REJECT"))
 
 (defn execution-report [msg-type msg session]
@@ -133,7 +135,7 @@
                                   (decode-msg venue msg-type msg)))
       (update-user session {:msg-type msg-type :report msg}))))
 
-(defn order-cancel-reject []
+(defn order-cancel-reject [])
   (println "ORDER CANCEL REJECT"))
 
 (defn logout-accepted [msg-type msg session]
@@ -146,8 +148,19 @@
 (defn resend-request []
   (println "RESEND REQUEST"))
 
-(defn sequence-reset []
-  (println "SEQUENCE RESET"))
+(defn sequence-reset [msg-type msg session]
+  (let [venue (:venue session)
+        decoded-msg (decode-msg venue msg-type msg)
+        cur-in-seq-num (:in-seq-num session)
+        new-seq-num (:new-seq-num decoded-msg)
+        dup-flag (:poss-dup-flag decoded-msg)]
+    (if (and (= dup-flag "no") (< new-seq-num cur-in-seq-num))
+      (do
+        (disconnect session)
+        (error (str "Inbound sequence-reset message requested reset to "
+                    new-seq-num " while current sequence number is "
+                    cur-in-seq-num ". No possible duplicate flag set.")))
+        (reset! (:in-seq-num session) (- new-seq-num 1)))))
 
 (defn msg-handler
   "Segments an inbound block of messages into individual messages, and processes
@@ -185,7 +198,7 @@
 
               :resend-request (resend-request)
 
-              :seq-reset (sequence-reset)
+              :seq-reset (sequence-reset msg-type m session)
               
               :unknown-msg-type (error "UNKNOWN MSG TYPE"))))
 
