@@ -6,12 +6,14 @@
             (aleph [tcp :as a])
             (gloss [core :as g])
             (cheshire [core :as c])
-            (clj-time [core :as t] [format :as f])))
+            (clj-time [core :as t] [format :as f]))
+  (:import (java.util.concurrent Executors Future TimeUnit)))
 
 ; FIX messages end with '10=xxx' where 'xxx' is a three-digit checksum
 ; left-padded with zeroes.
 (def ^:const msg-delimiter #"10=\d{3}\u0001")
 (def ^:const msg-identifier #"(?<=10=\d{3}\u0001)")
+(def heartbeat-transmitter (atom nil))
 
 ; The standard tag value for FIX message sequence numbers.
 (def ^:const seq-num-tag 34)
@@ -107,25 +109,41 @@
 
 (defn transmit-heartbeat
   ([session]
-    (send-msg session :heartbeat [[]]))
+    (if (open-channel? session)
+      (send-msg session :heartbeat [[]])))
   ([session test-request-id]
-    (send-msg session :heartbeat [:test-request-id test-request-id])))
+    (if (open-channel? session)
+      (send-msg session :heartbeat [:test-request-id test-request-id]))))
+
+
+(defn start-heartbeats [heartbeat-fn interval]
+  (do
+    (reset! heartbeat-transmitter (Executors/newSingleThreadScheduledExecutor))
+    (.scheduleAtFixedRate @heartbeat-transmitter heartbeat-fn interval interval
+                          TimeUnit/SECONDS)))
+
+(defn stop-heartbeats []
+  (do
+    (.shutdown @heartbeat-transmitter)
+    (reset! heartbeat-transmitter nil)))
 
 (defn logon-accepted [msg-type msg session]
-  (let [venue (:venue session)]
+  (let [venue (:venue session)
+        decoded-msg (decode-msg venue msg-type msg)]
     (update-user session {:msg-type msg-type
-                          :sender-comp-id (:sender-comp-id
-                                          (decode-msg venue msg-type msg))})))
+                          :sender-comp-id (:sender-comp-id decoded-msg)})
+    (start-heartbeats (fn [] (transmit-heartbeat session))
+                      (:heartbeat-interval decoded-msg))))
 
-(defn heartbeat [session]
-  (transmit-heartbeat session))
+(defn heartbeat []
+  (print "Receiving hearbeat..."))
 
 (defn test-request [msg-type msg session]
   (let [venue (:venue session)]
     (transmit-heartbeat session (:test-request-id (decode-msg venue msg-type 
                                                               msg)))))
 
-(defn session-reject [])
+(defn session-reject []
   (println "SESSION REJECT"))
 
 (defn execution-report [msg-type msg session]
@@ -135,16 +153,16 @@
                                   (decode-msg venue msg-type msg)))
       (update-user session {:msg-type msg-type :report msg}))))
 
-(defn order-cancel-reject [])
+(defn order-cancel-reject []
   (println "ORDER CANCEL REJECT"))
 
 (defn logout-accepted [msg-type msg session]
   (let [venue (:venue session)]
+    (stop-heartbeats)
     (update-user session {:msg-type msg-type
                           :sender-comp-id (:sender-comp-id
                                             (decode-msg (:venue session)
                                                          msg-type msg))})))
-
 (defn resend-request []
   (println "RESEND REQUEST"))
 
@@ -184,7 +202,7 @@
             (case msg-type
               :logon (logon-accepted msg-type m session)
 
-              :heartbeat (transmit-heartbeat session)
+              :heartbeat (heartbeat)
 
               :test-request (test-request msg-type m session)
 
@@ -416,3 +434,15 @@
    removed."
   []
   (reset! sessions {}))
+
+
+(def fix-client (load-client :stage-fix-client))
+
+(defn my-handler [key-id reference last-msg new-msg]
+  (if (not (nil? (agent-error (:next-msg (get-session fix-client)))))
+    (restart-agent (:next-msg (get-session fix-client)) {}))
+  (case (:msg-type new-msg)
+    :logon (println "Logon accepted by" (:sender-comp-id new-msg))
+    :execution-report nil
+    :logout (println "Logged out from" (:sender-comp-id new-msg))))
+
