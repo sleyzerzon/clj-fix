@@ -135,8 +135,7 @@
     (start-heartbeats (fn [] (transmit-heartbeat session))
                       (:heartbeat-interval decoded-msg))))
 
-(defn heartbeat []
-  (print "Receiving hearbeat..."))
+(defn heartbeat [])
 
 (defn test-request [msg-type msg session]
   (let [venue (:venue session)]
