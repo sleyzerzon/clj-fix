@@ -433,15 +433,3 @@
    removed."
   []
   (reset! sessions {}))
-
-
-(def fix-client (load-client :stage-fix-client))
-
-(defn my-handler [key-id reference last-msg new-msg]
-  (if (not (nil? (agent-error (:next-msg (get-session fix-client)))))
-    (restart-agent (:next-msg (get-session fix-client)) {}))
-  (case (:msg-type new-msg)
-    :logon (println "Logon accepted by" (:sender-comp-id new-msg))
-    :execution-report nil
-    :logout (println "Logged out from" (:sender-comp-id new-msg))))
-
